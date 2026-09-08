@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Absensi QR Cerdas</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'app-blue': '#1E3A8A',     // Deep Blue
+                        'app-blue-light': '#3B82F6', 
+                        'app-pink': '#BE185D',     // Dark Pink
+                        'app-pink-light': '#F472B6',
+                        'app-yellow': '#FACC15',   // Yellow
+                        'app-bg': '#F3F4F6'
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #F8FAFC; }
+        .tab-active { border-bottom: 4px solid #BE185D; color: #1E3A8A; font-weight: 700; }
+        .hide { display: none; }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        #reader { width: 100%; max-width: 500px; margin: 0 auto; border-radius: 0.5rem; overflow: hidden; border: none !important;}
+        #reader video { border-radius: 0.5rem; object-fit: cover;}
+    </style>
+</head>
+<body class="text-gray-800 h-screen flex flex-col">
+
+    <nav class="bg-app-blue text-white shadow-lg sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center gap-3">
+                    <i class="fas fa-qrcode text-app-yellow text-2xl"></i>
+                    <span class="font-bold text-xl tracking-tight">Hadir<span class="text-app-yellow">QR</span></span>
+                </div>
+                <div class="hidden md:block">
+                    <span id="sync-indicator" class="text-xs bg-green-500/20 text-green-300 px-2 py-1 rounded-full border border-green-500/50">
+                        <i class="fas fa-check-circle mr-1"></i> Data Sinkron
+                    </span>
+                </div>
+            </div>
+        </div>
+        <!-- Mobile/Desktop Tabs -->
+        <div class="bg-white text-gray-500 shadow overflow-x-auto whitespace-nowrap">
+            <div class="max-w-7xl mx-auto px-2 flex sm:justify-start">
+                <button onclick="switchTab('scan')" id="tab-scan" class="tab-btn tab-active px-4 py-3 text-sm focus:outline-none transition-colors duration-200">
+                    <i class="fas fa-camera mr-2"></i>Scan QR
+                </button>
+                <button onclick="switchTab('data')" id="tab-data" class="tab-btn px-4 py-3 text-sm focus:outline-none transition-colors duration-200">
+                    <i class="fas fa-users mr-2"></i>Data Peserta
+                </button>
+                <button onclick="switchTab('status')" id="tab-status" class="tab-btn px-4 py-3 text-sm focus:outline-none transition-colors duration-200">
+                    <i class="fas fa-clipboard-list mr-2"></i>Status
+                </button>
+                <button onclick="switchTab('stats')" id="tab-stats" class="tab-btn px-4 py-3 text-sm focus:outline-none transition-colors duration-200">
+                    <i class="fas fa-chart-pie mr-2"></i>Statistik
+                </button>
+                <button onclick="switchTab('rekap')" id="tab-rekap" class="tab-btn px-4 py-3 text-sm focus:outline-none transition-colors duration-200">
+                    <i class="fas fa-file-excel mr-2"></i>Rekap Absen
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <main class="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 relative">
+        <div class="max-w-7xl mx-auto">
+
+            <!-- CONFIG SECTION (Always visible initially until URL is set, but we will mock it for demo) -->
+            <div id="config-alert" class="bg-app-yellow text-app-blue p-4 rounded-lg shadow-md mb-6 flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div>
+                    <h3 class="font-bold"><i class="fas fa-exclamation-triangle mr-2"></i>URL Google Apps Script Belum Diatur</h3>
+                    <p class="text-sm">Untuk sinkronisasi *real-time*, masukkan URL Web App Google Apps Script Anda.</p>
+                </div>
+                <button onclick="showConfigModal()" class="bg-app-blue text-white px-4 py-2 rounded shadow hover:bg-app-blue-light transition">Atur URL</button>
+            </div>
+
+            <!-- SECTION: SCAN QR -->
+            <section id="sec-scan" class="section-content fade-in">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col items-center">
+                        <h2 class="text-xl font-bold text-app-blue mb-4">Pemindai Kode QR</h2>
+                        
+                        <div id="reader" class="bg-gray-100 border-2 border-dashed border-gray-300 relative shadow-inner">
+                            <!-- Scanner renders here -->
+                            <div id="reader-placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-gray-400 p-8 text-center bg-gray-100 z-10">
+                                <i class="fas fa-qrcode text-5xl mb-2 text-gray-300"></i>
+                                <p>Kamera nonaktif.</p>
+                            </div>
+                        </div>
+
+                        <div class="mt-6 flex gap-4 w-full justify-center">
+                            <button id="btn-start-scan" onclick="startScanner()" class="bg-app-pink text-white px-6 py-3 rounded-xl font-semibold shadow-md hover:bg-pink-700 transition w-full sm:w-auto">
+                                <i class="fas fa-play mr-2"></i>Mulai Scan
+                            </button>
+                            <button id="btn-stop-scan" onclick="stopScanner()" class="bg-gray-500 text-white px-6 py-3 rounded-xl font-semibold shadow-md hover:bg-gray-600 transition w-full sm:w-auto hidden">
+                                <i class="fas fa-stop mr-2"></i>Hentikan
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                        <h2 class="text-xl font-bold text-app-blue mb-4">Log Terakhir</h2>
+                        <div class="bg-gray-50 rounded-xl p-4 h-[350px] overflow-y-auto border border-gray-200" id="scan-log">
+                            <p class="text-gray-400 text-center italic mt-10" id="empty-log">Belum ada aktivitas scan</p>
+                            <!-- Logs go here -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION: DATA PESERTA -->
+            <section id="sec-data" class="section-content hide fade-in">
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                        <div>
+                            <h2 class="text-xl font-bold text-app-blue">Data Induk Peserta</h2>
+                            <p class="text-sm text-gray-500">Total: <span id="total-peserta">0</span> Peserta</p>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <button onclick="fetchData()" class="bg-app-blue text-white px-4 py-2 rounded-lg text-sm shadow hover:bg-blue-700 transition">
+                                <i class="fas fa-sync-alt mr-2"></i>Muat Ulang Data
+                            </button>
+                            <button onclick="downloadBatchQR()" class="bg-app-yellow text-app-blue px-4 py-2 rounded-lg text-sm font-semibold shadow hover:bg-yellow-500 transition">
+                                <i class="fas fa-file-archive mr-2"></i>Download Batch QR (.zip)
+                            </button>
+                            <button onclick="confirmReset()" class="bg-red-500 text-white px-4 py-2 rounded-lg text-sm shadow hover:bg-red-600 transition">
+                                <i class="fas fa-trash-alt mr-2"></i>Kosongkan Absen
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200 text-sm">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-600">ID</th>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-600">Nama Peserta</th>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-600">Prodi</th>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-600">Fakultas</th>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-600">Kelas</th>
+                                    <th class="px-4 py-3 text-center font-semibold text-gray-600">Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-data-body" class="bg-white divide-y divide-gray-200">
+                                <!-- Data rows -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION: STATUS PESERTA -->
+            <section id="sec-status" class="section-content hide fade-in">
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                    <div class="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
+                        <h2 class="text-xl font-bold text-app-blue">Status Kehadiran Hari Ini</h2>
+                        
+                        <div class="flex gap-2 items-center">
+                            <label class="text-sm text-gray-600">Filter Fakultas:</label>
+                            <select id="filter-fakultas" onchange="renderStatusTable()" class="border-gray-300 rounded-lg text-sm shadow-sm p-2 outline-none focus:ring-2 focus:ring-app-pink">
+                                <option value="Semua">Semua Fakultas</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                        <div class="bg-green-50 p-4 rounded-xl border border-green-100 flex items-center justify-between">
+                            <div><p class="text-sm text-green-600 font-bold">Hadir</p><p class="text-2xl font-black text-green-700" id="count-hadir">0</p></div>
+                            <i class="fas fa-check-circle text-3xl text-green-300"></i>
+                        </div>
+                        <div class="bg-red-50 p-4 rounded-xl border border-red-100 flex items-center justify-between">
+                            <div><p class="text-sm text-red-600 font-bold">Belum Hadir</p><p class="text-2xl font-black text-red-700" id="count-absen">0</p></div>
+                            <i class="fas fa-times-circle text-3xl text-red-300"></i>
+                        </div>
+                        <div class="bg-blue-50 p-4 rounded-xl border border-blue-100 flex items-center justify-between">
+                            <div><p class="text-sm text-blue-600 font-bold">Persentase</p><p class="text-2xl font-black text-blue-700" id="count-percent">0%</p></div>
+                            <i class="fas fa-percentage text-3xl text-blue-300"></i>
+                        </div>
+                    </div>
+
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200 text-sm">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-600">Nama</th>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-600">Fakultas</th>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-600">Kelas</th>
+                                    <th class="px-4 py-3 text-center font-semibold text-gray-600">Status</th>
+                                    <th class="px-4 py-3 text-right font-semibold text-gray-600">Waktu Scan</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-status-body" class="bg-white divide-y divide-gray-200">
+                                <!-- Status rows -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION: STATISTIK -->
+            <section id="sec-stats" class="section-content hide fade-in">
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                    <h2 class="text-xl font-bold text-app-blue mb-6">Statistik Kehadiran Berdasarkan Fakultas</h2>
+                    <div class="w-full max-w-4xl mx-auto h-[400px]">
+                        <canvas id="attendanceChart"></canvas>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION: REKAP ABSEN -->
+            <section id="sec-rekap" class="section-content hide fade-in">
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                    <div class="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
+                        <h2 class="text-xl font-bold text-app-blue">Rekapitulasi Absensi Akhir</h2>
+                        <button onclick="downloadExcel()" class="bg-green-600 text-white px-6 py-2 rounded-lg font-semibold shadow hover:bg-green-700 transition">
+                            <i class="fas fa-file-excel mr-2"></i>Download Excel
+                        </button>
+                    </div>
+
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200 text-sm">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-600 cursor-pointer hover:bg-gray-100" onclick="sortRekap('id')">ID <i class="fas fa-sort text-xs"></i></th>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-600">Nama</th>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-600">Fakultas</th>
+                                    <th class="px-4 py-3 text-center font-semibold text-gray-600">Status</th>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-600">Waktu</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-rekap-body" class="bg-white divide-y divide-gray-200">
+                                <!-- Rekap rows -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+    </main>
+
+    <!-- HIDDEN DIV FOR QR GENERATION -->
+    <div id="qr-generation-area" class="hidden"></div>
+
+    <!-- CUSTOM TOAST NOTIFICATIONS -->
+    <div id="toast-container" class="fixed bottom-5 right-5 flex flex-col gap-3 z-50"></div>
+
+    <!-- MODAL: SHOW SINGLE QR -->
+    <div id="modal-qr" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4 transition-opacity">
+        <div class="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full text-center relative">
+            <button onclick="closeModal('modal-qr')" class="absolute top-4 right-4 text-gray-400 hover:text-gray-700">
+                <i class="fas fa-times text-xl"></i>
+            </button>
+            <h3 class="text-lg font-bold text-app-blue mb-1" id="modal-qr-nama">Nama Peserta</h3>
+            <p class="text-sm text-gray-500 mb-4" id="modal-qr-id">ID: 000</p>
+            <div id="single-qr-container" class="flex justify-center p-4 bg-gray-50 rounded-xl mb-4 border"></div>
+            <button onclick="downloadSingleQR()" class="w-full bg-app-pink text-white py-2 rounded-lg font-semibold hover:bg-pink-700 transition">
+                <i class="fas fa-download mr-2"></i>Download QR
+            </button>
+        </div>
+    </div>
+
+    <!-- MODAL: CONFIG URL -->
+    <div id="modal-config" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4">
+        <div class="bg-white p-6 rounded-2xl shadow-xl max-w-lg w-full">
+            <h3 class="text-xl font-bold text-app-blue mb-4">Pengaturan Google Apps Script</h3>
+            <p class="text-sm text-gray-600 mb-4">Masukkan URL Web App dari Google Apps Script untuk menghubungkan aplikasi ini dengan database Google Sheets Anda.</p>
+            <input type="text" id="input-gas-url" placeholder="https://script.google.com/macros/s/..." class="w-full border border-gray-300 p-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-app-pink mb-4 text-sm">
+            <div class="flex justify-end gap-2">
+                <button onclick="closeModal('modal-config')" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Batal</button>
+                <button onclick="saveConfig()" class="px-4 py-2 bg-app-blue text-white rounded-lg hover:bg-blue-800 shadow">Simpan & Muat Data</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: CONFIRM BOX -->
+    <div id="modal-confirm" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4">
+        <div class="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full text-center">
+            <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 mb-4">
+                <i class="fas fa-exclamation-triangle text-red-600 text-xl"></i>
+            </div>
+            <h3 class="text-lg font-bold text-gray-900 mb-2">Kosongkan Database?</h3>
+            <p class="text-sm text-gray-500 mb-6">Tindakan ini akan menghapus semua status kehadiran peserta di Google Sheets. Tindakan ini tidak dapat dibatalkan.</p>
+            <div class="flex justify-center gap-3">
+                <button onclick="closeModal('modal-confirm')" class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex-1">Batal</button>
+                <button onclick="executeReset()" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 shadow flex-1">Ya, Hapus</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /* --- STATE MANAGEMENT --- */
+        let GAS_URL = localStorage.getItem('GAS_URL') || "";
+        let participants = []; 
+        let html5QrcodeScanner = null;
+        let isScanning = false;
+        let chartInstance = null;
+        let currentQRId = null; // For single QR download
+
+        // MOCK DATA for initial view if GAS is not connected yet
+        const mockData = [
+            { id: "MHS001", nama: "Budi Santoso", prodi: "Informatika", fakultas: "Fasilkom", kelas: "Reguler Pagi", status_absen: "", waktu_absen: "" },
+            { id: "MHS002", nama: "Siti Aminah", prodi: "Sistem Informasi", fakultas: "Fasilkom", kelas: "Reguler Sore", status_absen: "Hadir", waktu_absen: "08/09/2026, 08:15:00" },
+            { id: "MHS003", nama: "Andi Wijaya", prodi: "Manajemen", fakultas: "FEB", kelas: "Reguler Pagi", status_absen: "", waktu_absen: "" },
+            { id: "MHS004", nama: "Rina Kumala", prodi: "Akuntansi", fakultas: "FEB", kelas: "Reguler Pagi", status_absen: "", waktu_absen: "" },
+            { id: "MHS005", nama: "Joko Anwar", prodi: "Ilmu Komunikasi", fakultas: "FISIP", kelas: "Reguler Sore", status_absen: "Hadir", waktu_absen: "08/09/2026, 15:30:22" },
+        ];
+
+        /* --- INITIALIZATION --- */
+        window.onload = () => {
+            if (GAS_URL) {
+                document.getElementById('config-alert').style.display = 'none';
+                fetchData();
+            } else {
+                // Load mock data for demonstration
+                participants = [...mockData];
+                updateAllUI();
+                showToast("Berjalan dalam Mode Demo. Atur URL untuk sinkronisasi asli.", "warning");
+            }
+        };
+
+        /* --- UI NAVIGATION --- */
+        function switchTab(tabId) {
+            // Update buttons
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('tab-active');
+            });
+            document.getElementById(`tab-${tabId}`).classList.add('tab-active');
+
+            // Update sections
+            document.querySelectorAll('.section-content').forEach(sec => {
+                sec.classList.add('hide');
+            });
+            document.getElementById(`sec-${tabId}`).classList.remove('hide');
+
+            // Render specific updates if needed
+            if(tabId === 'stats') renderChart();
+            if(tabId !== 'scan' && isScanning) stopScanner(); // Auto stop camera when leaving tab
+        }
+
+        /* --- STREAMING_CHUNK:Networking & API (Optimistic Updates)... --- */
+        /* --- API INTERACTION --- */
+        async function fetchData() {
+            if (!GAS_URL) return;
+            setSyncStatus(true, "Mengambil data...");
+            try {
+                const response = await fetch(GAS_URL);
+                participants = await response.json();
+                updateAllUI();
+                showToast("Data berhasil disinkronisasi", "success");
+                setSyncStatus(false, "Data Sinkron");
+            } catch (error) {
+                console.error(error);
+                showToast("Gagal mengambil data. Periksa koneksi/URL.", "error");
+                setSyncStatus(false, "Offline", true);
+            }
+        }
+
+        // Optimistic Update Implementation
+        async function syncHadirToGAS(id, waktu) {
+            if (!GAS_URL) return; // Ignore if in mock mode
+            setSyncStatus(true, "Menyinkronkan...");
+            
+            const formData = new URLSearchParams();
+            formData.append('action', 'absen');
+            formData.append('id', id);
+            formData.append('waktu', waktu);
+
+            try {
+                // Background POST request
+                fetch(GAS_URL, { method: 'POST', body: formData })
+                .then(res => res.json())
+                .then(data => {
+                    if(data.status === "success") {
+                        setSyncStatus(false, "Data Sinkron");
+                    } else if (data.status === "already_present") {
+                        setSyncStatus(false, "Data Sinkron");
+                    } else {
+                        showToast("Peringatan: ID " + id + " tidak ditemukan di database server.", "error");
+                        setSyncStatus(false, "Error Sinkronisasi", true);
+                    }
+                }).catch(e => {
+                    showToast("Koneksi bermasalah. Data tersimpan lokal.", "warning");
+                    setSyncStatus(false, "Offline", true);
+                });
+            } catch (error) {
+                console.error("Fetch error", error);
+            }
+        }
+
+        async function executeReset() {
+            closeModal('modal-confirm');
+            if(!GAS_URL) {
+                // Mock reset
+                participants.forEach(p => { p.status_absen = ""; p.waktu_absen = ""; });
+                updateAllUI();
+                showToast("Database lokal dikosongkan (Mode Demo)", "success");
+                return;
+            }
+
+            setSyncStatus(true, "Menghapus data...");
+            const formData = new URLSearchParams();
+            formData.append('action', 'reset');
+            
+            try {
+                const res = await fetch(GAS_URL, { method: 'POST', body: formData });
+                const data = await res.json();
+                if(data.status === "cleared") {
+                    showToast("Database berhasil dikosongkan!", "success");
+                    fetchData(); // reload
+                }
+            } catch (e) {
+                showToast("Gagal mengosongkan database.", "error");
+                setSyncStatus(false, "Error", true);
+            }
+        }
+
+        /* --- STREAMING_CHUNK:Core QR Scanner Logic... --- */
+        /* --- QR SCANNER LOGIC --- */
+        function forceResetScannerUI() {
+            isScanning = false;
+            const placeholder = document.getElementById('reader-placeholder');
+            if (placeholder) placeholder.classList.remove('hidden');
+            
+            const btnStart = document.getElementById('btn-start-scan');
+            if (btnStart) btnStart.classList.remove('hidden');
+            
+            const btnStop = document.getElementById('btn-stop-scan');
+            if (btnStop) btnStop.classList.add('hidden');
+        }
+
+        function startScanner() {
+            document.getElementById('reader-placeholder').classList.add('hidden');
+            document.getElementById('btn-start-scan').classList.add('hidden');
+            document.getElementById('btn-stop-scan').classList.remove('hidden');
+
+            if(!html5QrcodeScanner) {
+                html5QrcodeScanner = new Html5Qrcode("reader");
+            }
+            
+            const config = { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 };
+            
+            html5QrcodeScanner.start(
+                { facingMode: "environment" },
+                config,
+                onScanSuccess,
+                onScanFailure
+            ).then(() => {
+                isScanning = true;
+            }).catch(err => {
+                console.error(err);
+                showToast("Gagal mengakses kamera.", "error");
+                forceResetScannerUI();
+            });
+        }
+
+        function stopScanner() {
+            if (html5QrcodeScanner && isScanning) {
+                html5QrcodeScanner.stop().then(() => {
+                    forceResetScannerUI();
+                }).catch(err => {
+                    console.error("Gagal menghentikan scanner", err);
+                    forceResetScannerUI();
+                });
+            } else {
+                forceResetScannerUI();
+            }
+        }
+
+        // Prevent double scan spam using a small delay
+        let lastScannedId = "";
+        let lastScanTime = 0;
+
+        function onScanSuccess(decodedText) {
+            const now = Date.now();
+            // Debounce same QR code for 3 seconds
+            if(decodedText === lastScannedId && (now - lastScanTime) < 3000) return;
+            
+            lastScannedId = decodedText;
+            lastScanTime = now;
+            processScan(decodedText);
+        }
+
+        function onScanFailure(error) {
+            // Background scanning errors, usually ignored
+        }
+
+        function processScan(id) {
+            // Find in local memory (Super fast)
+            const p = participants.find(x => x.id === id);
+            
+            if (!p) {
+                showToast("ID " + id + " tidak terdaftar!", "error");
+                logScan(id, "Tidak Dikenal", "Gagal (Tidak Terdaftar)", "text-red-500");
+                playSound('error');
+                return;
+            }
+
+            if (p.status_absen === "Hadir") {
+                showToast(p.nama + " sudah melakukan absensi sebelumnya.", "warning");
+                logScan(p.id, p.nama, "Ditolak (Sudah Absen)", "text-app-yellow");
+                playSound('warning');
+                return;
+            }
+
+            // OPTIMISTIC UPDATE: Update local immediately
+            const waktu = new Date().toLocaleString('id-ID');
+            p.status_absen = "Hadir";
+            p.waktu_absen = waktu;
+            
+            // Update UI elements
+            updateAllUI();
+            
+            // Log & Notify
+            showToast("Berhasil: " + p.nama, "success");
+            logScan(p.id, p.nama, "Berhasil Hadir", "text-green-500");
+            playSound('success');
+
+            // Sync to background
+            syncHadirToGAS(p.id, waktu);
+        }
+
+        function logScan(id, nama, status, colorClass) {
+            const logContainer = document.getElementById('scan-log');
+            const emptyTxt = document.getElementById('empty-log');
+            if(emptyTxt) emptyTxt.remove();
+
+            const time = new Date().toLocaleTimeString('id-ID');
+            const logHTML = `
+                <div class="bg-white p-3 rounded shadow-sm border border-gray-100 mb-2 text-sm flex justify-between items-center border-l-4 border-l-gray-300">
+                    <div>
+                        <p class="font-bold text-gray-800">${nama} <span class="text-xs text-gray-400 font-normal ml-1">(${id})</span></p>
+                        <p class="text-xs text-gray-500"><i class="far fa-clock mr-1"></i>${time}</p>
+                    </div>
+                    <span class="font-semibold ${colorClass}">${status}</span>
+                </div>
+            `;
+            logContainer.insertAdjacentHTML('afterbegin', logHTML);
+        }
+
+        /* --- STREAMING_CHUNK:UI Rendering & Data Tables... --- */
+        /* --- UPDATE UI FUNCTIONS --- */
+        function updateAllUI() {
+            renderDataPeserta();
+            updateFilterOptions();
+            renderStatusTable();
+            renderRekapTable();
+            if(document.getElementById('sec-stats').classList.contains('hide') === false) {
+                renderChart();
+            }
+        }
+
+        function renderDataPeserta() {
+            const tbody = document.getElementById('table-data-body');
+            document.getElementById('total-peserta').innerText = participants.length;
+            tbody.innerHTML = "";
+            
+            participants.forEach(p => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="px-4 py-3 whitespace-nowrap text-gray-700 font-medium">${p.id}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-gray-900">${p.nama}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-gray-600">${p.prodi}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-gray-600">${p.fakultas}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-gray-600">
+                        <span class="px-2 py-1 text-xs rounded-full ${p.kelas.includes('Pagi') ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}">${p.kelas}</span>
+                    </td>
+                    <td class="px-4 py-3 whitespace-nowrap text-center">
+                        <button onclick="showQR('${p.id}', '${p.nama}')" class="text-app-pink hover:text-pink-800 bg-pink-50 p-2 rounded-lg" title="Lihat QR">
+                            <i class="fas fa-qrcode"></i> QR
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function updateFilterOptions() {
+            const select = document.getElementById('filter-fakultas');
+            const currentVal = select.value;
+            const fakultasSet = new Set(participants.map(p => p.fakultas));
+            
+            select.innerHTML = '<option value="Semua">Semua Fakultas</option>';
+            fakultasSet.forEach(f => {
+                if(f) select.innerHTML += `<option value="${f}">${f}</option>`;
+            });
+            select.value = currentVal; // Restore selection
+        }
+
+        function renderStatusTable() {
+            const tbody = document.getElementById('table-status-body');
+            const filter = document.getElementById('filter-fakultas').value;
+            tbody.innerHTML = "";
+
+            let filtered = participants;
+            if (filter !== "Semua") {
+                filtered = participants.filter(p => p.fakultas === filter);
+            }
+
+            let hadirCount = 0;
+            
+            filtered.forEach(p => {
+                const isHadir = p.status_absen === "Hadir";
+                if(isHadir) hadirCount++;
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="px-4 py-3 whitespace-nowrap text-gray-900 font-medium">${p.nama} <br><span class="text-xs text-gray-400">${p.id}</span></td>
+                    <td class="px-4 py-3 whitespace-nowrap text-gray-600">${p.fakultas}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-gray-600">${p.kelas}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-center">
+                        <span class="px-3 py-1 text-xs font-bold rounded-full ${isHadir ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200'}">
+                            ${isHadir ? 'Hadir' : 'Belum'}
+                        </span>
+                    </td>
+                    <td class="px-4 py-3 whitespace-nowrap text-right text-gray-500 text-xs">${isHadir ? p.waktu_absen : '-'}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            // Update Stats Cards
+            document.getElementById('count-hadir').innerText = hadirCount;
+            document.getElementById('count-absen').innerText = filtered.length - hadirCount;
+            const pct = filtered.length === 0 ? 0 : Math.round((hadirCount / filtered.length) * 100);
+            document.getElementById('count-percent').innerText = pct + "%";
+        }
+
+        /* --- STREAMING_CHUNK:Chart.js & Excel Export... --- */
+        function renderChart() {
+            const ctx = document.getElementById('attendanceChart').getContext('2d');
+            
+            // Process data for chart
+            const fakultasSet = [...new Set(participants.map(p => p.fakultas))].filter(Boolean);
+            const dataHadir = [];
+            const dataAbsen = [];
+
+            fakultasSet.forEach(fak => {
+                const pInFak = participants.filter(p => p.fakultas === fak);
+                const hadir = pInFak.filter(p => p.status_absen === "Hadir").length;
+                dataHadir.push(hadir);
+                dataAbsen.push(pInFak.length - hadir);
+            });
+
+            if (chartInstance) chartInstance.destroy();
+
+            chartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: fakultasSet,
+                    datasets: [
+                        {
+                            label: 'Hadir',
+                            data: dataHadir,
+                            backgroundColor: '#BE185D', // app-pink
+                            borderRadius: 4
+                        },
+                        {
+                            label: 'Belum Hadir',
+                            data: dataAbsen,
+                            backgroundColor: '#E5E7EB', // gray
+                            borderRadius: 4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { beginAtZero: true, stacked: true },
+                        x: { stacked: true }
+                    },
+                    plugins: {
+                        legend: { position: 'bottom' }
+                    }
+                }
+            });
+        }
+
+        let rekapSortAsc = true;
+        function sortRekap(col) {
+            rekapSortAsc = !rekapSortAsc;
+            participants.sort((a, b) => {
+                if(a[col] < b[col]) return rekapSortAsc ? -1 : 1;
+                if(a[col] > b[col]) return rekapSortAsc ? 1 : -1;
+                return 0;
+            });
+            renderRekapTable();
+        }
+
+        function renderRekapTable() {
+            const tbody = document.getElementById('table-rekap-body');
+            tbody.innerHTML = "";
+            participants.forEach(p => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="px-4 py-3 whitespace-nowrap text-gray-700 font-medium">${p.id}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-gray-900">${p.nama}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-gray-600">${p.fakultas}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-center text-xs font-bold ${p.status_absen === 'Hadir' ? 'text-green-600' : 'text-red-500'}">${p.status_absen || 'Belum'}</td>
+                    <td class="px-4 py-3 whitespace-nowrap text-gray-500 text-xs">${p.waktu_absen || '-'}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function downloadExcel() {
+            if(participants.length === 0) return showToast("Tidak ada data untuk didownload", "warning");
+            
+            // Clean up data for excel
+            const exportData = participants.map(p => ({
+                "ID Peserta": p.id,
+                "Nama Lengkap": p.nama,
+                "Program Studi": p.prodi,
+                "Fakultas": p.fakultas,
+                "Kelas": p.kelas,
+                "Status Kehadiran": p.status_absen === "Hadir" ? "Hadir" : "Alpa",
+                "Waktu Tap": p.waktu_absen || ""
+            }));
+
+            const ws = XLSX.utils.json_to_sheet(exportData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Rekap_Absensi");
+            
+            const dateStr = new Date().toISOString().split('T')[0];
+            XLSX.writeFile(wb, `Rekap_Absensi_${dateStr}.xlsx`);
+            showToast("File Excel berhasil diunduh!", "success");
+        }
+
+        /* --- STREAMING_CHUNK:QR Generation (Single & Batch)... --- */
+        /* --- QR CODE GENERATOR LOGIC --- */
+        function showQR(id, nama) {
+            currentQRId = id;
+            document.getElementById('modal-qr-nama').innerText = nama;
+            document.getElementById('modal-qr-id').innerText = "ID: " + id;
+            
+            const container = document.getElementById('single-qr-container');
+            container.innerHTML = ""; // clear previous
+            
+            new QRCode(container, {
+                text: id,
+                width: 200,
+                height: 200,
+                colorDark : "#1E3A8A", // Use app-blue for QR code
+                colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.H
+            });
+            
+            document.getElementById('modal-qr').classList.remove('hidden');
+            document.getElementById('modal-qr').classList.add('flex');
+        }
+
+        function downloadSingleQR() {
+            const container = document.getElementById('single-qr-container');
+            const img = container.querySelector('img');
+            const canvas = container.querySelector('canvas');
+            
+            let url = "";
+            if (img && img.src) { url = img.src; } 
+            else if (canvas) { url = canvas.toDataURL("image/png"); }
+            else return;
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `QR_${currentQRId}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        async function downloadBatchQR() {
+            if(participants.length === 0) return showToast("Tidak ada data peserta", "warning");
+            
+            showToast("Membuat file ZIP, mohon tunggu...", "info");
+            const zip = new JSZip();
+            const qrFolder = zip.folder("QR_Codes_Peserta");
+            const tempArea = document.getElementById('qr-generation-area');
+            tempArea.innerHTML = "";
+
+            // Generate asynchronously so UI doesn't freeze
+            for(let i=0; i<participants.length; i++) {
+                const p = participants[i];
+                const div = document.createElement('div');
+                tempArea.appendChild(div);
+                
+                // Draw QR
+                const qrcode = new QRCode(div, {
+                    text: p.id,
+                    width: 300, height: 300,
+                    correctLevel: QRCode.CorrectLevel.H
+                });
+
+                // Wait a tiny bit for canvas to render
+                await new Promise(r => setTimeout(r, 10)); 
+                
+                const canvas = div.querySelector('canvas');
+                if(canvas) {
+                    const dataUrl = canvas.toDataURL("image/png");
+                    const base64Data = dataUrl.replace(/^data:image\/(png|jpg);base64,/, "");
+                    // Nama file: Fakultas_Prodi_Nama_ID.png (Aman untuk OS)
+                    const safeName = p.nama.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+                    const fileName = `${p.fakultas}_${safeName}_${p.id}.png`;
+                    qrFolder.file(fileName, base64Data, {base64: true});
+                }
+            }
+
+            zip.generateAsync({type:"blob"}).then(function(content) {
+                saveAs(content, "Batch_QR_Absensi.zip");
+                showToast("Berhasil mendownload batch QR!", "success");
+                tempArea.innerHTML = ""; // cleanup
+            });
+        }
+
+        /* --- STREAMING_CHUNK:Utilities, Modals, & Sound... --- */
+        /* --- UTILITIES & MODALS --- */
+        function showConfigModal() {
+            document.getElementById('input-gas-url').value = GAS_URL;
+            document.getElementById('modal-config').classList.remove('hidden');
+            document.getElementById('modal-config').classList.add('flex');
+        }
+
+        function saveConfig() {
+            const val = document.getElementById('input-gas-url').value.trim();
+            GAS_URL = val;
+            localStorage.setItem('GAS_URL', val);
+            closeModal('modal-config');
+            if(GAS_URL) {
+                document.getElementById('config-alert').style.display = 'none';
+                fetchData();
+            }
+        }
+
+        function confirmReset() {
+            document.getElementById('modal-confirm').classList.remove('hidden');
+            document.getElementById('modal-confirm').classList.add('flex');
+        }
+
+        function closeModal(id) {
+            document.getElementById(id).classList.add('hidden');
+            document.getElementById(id).classList.remove('flex');
+        }
+
+        function setSyncStatus(isSyncing, text, isError = false) {
+            const ind = document.getElementById('sync-indicator');
+            if(isSyncing) {
+                ind.className = "text-xs bg-yellow-500/20 text-yellow-600 px-2 py-1 rounded-full border border-yellow-500/50 flex items-center";
+                ind.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i> ${text}`;
+            } else if(isError) {
+                ind.className = "text-xs bg-red-500/20 text-red-600 px-2 py-1 rounded-full border border-red-500/50 flex items-center";
+                ind.innerHTML = `<i class="fas fa-exclamation-triangle mr-1"></i> ${text}`;
+            } else {
+                ind.className = "text-xs bg-green-500/20 text-green-300 px-2 py-1 rounded-full border border-green-500/50 flex items-center";
+                ind.innerHTML = `<i class="fas fa-check-circle mr-1"></i> ${text}`;
+            }
+        }
+
+        function showToast(message, type = "info") {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            
+            let bg = "bg-gray-800";
+            let icon = "fa-info-circle text-blue-400";
+            if(type === "success") { bg = "bg-green-800"; icon = "fa-check-circle text-green-400"; }
+            if(type === "error") { bg = "bg-red-800"; icon = "fa-times-circle text-red-400"; }
+            if(type === "warning") { bg = "bg-app-yellow text-app-blue font-bold"; icon = "fa-exclamation-circle text-app-blue"; }
+
+            toast.className = `${bg} ${type==='warning'?'':'text-white'} px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 transition-all transform translate-x-full opacity-0 duration-300 ease-out`;
+            toast.innerHTML = `<i class="fas ${icon} text-xl"></i><span class="text-sm">${message}</span>`;
+            
+            container.appendChild(toast);
+            
+            // Animate in
+            setTimeout(() => {
+                toast.classList.remove('translate-x-full', 'opacity-0');
+            }, 10);
+
+            // Remove after 3s
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-x-full');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // Simple Audio Feedback (Using Web Audio API to avoid loading external files)
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playSound(type) {
+            if(audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            if(type === 'success') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(1200, audioCtx.currentTime + 0.1);
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+            } else if (type === 'error') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(150, audioCtx.currentTime + 0.2);
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+            } else if (type === 'warning') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+                gainNode.gain.setValueAtTime(0.05, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+            }
+        }
+    </script>
+</body>
+</html>
